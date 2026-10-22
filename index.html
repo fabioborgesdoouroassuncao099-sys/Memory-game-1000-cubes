@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Memória 1000 Cubos</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f0f14;
+    color: #eee;
+    font-family: system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px;
+    min-height: 100vh;
+  }
+  header {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  header span { font-variant-numeric: tabular-nums; }
+  button {
+    background: #2a2a3a;
+    color: #eee;
+    border: 1px solid #444;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button:hover { background: #3a3a4a; }
+
+  #board {
+    display: grid;
+    /* 1000 cubos: 40 x 25 */
+    grid-template-columns: repeat(40, 1fr);
+    gap: 2px;
+    width: 100%;
+    max-width: 1400px;
+  }
+
+  .cube {
+    aspect-ratio: 1 / 1;
+    background: #1e1e2e;
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+    transition: transform 0.1s, background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    overflow: hidden;
+    user-select: none;
+    border: 1px solid #2a2a3a;
+  }
+  .cube:hover {
+    background: #2a2a3e;
+    transform: scale(1.4);
+    z-index: 2;
+  }
+  .cube.flipped {
+    background: var(--c);
+    transform: none;
+  }
+  .cube.flipped::after {
+    content: attr(data-symbol);
+    font-size: 9px;
+    color: rgba(0,0,0,0.7);
+    font-weight: bold;
+  }
+  .cube.matched {
+    background: var(--c);
+    opacity: 0.85;
+    cursor: default;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3);
+  }
+  .cube.matched::after {
+    content: attr(data-symbol);
+    font-size: 9px;
+    color: rgba(0,0,0,0.7);
+    font-weight: bold;
+  }
+  .cube.wrong {
+    animation: shake 0.25s;
+  }
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    25% { transform: translateX(-2px); }
+    75% { transform: translateX(2px); }
+  }
+
+  #win {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 20px;
+    z-index: 100;
+    font-size: 28px;
+    text-align: center;
+    padding: 20px;
+  }
+  #win.show { display: flex; }
+  #win button { font-size: 18px; padding: 10px 24px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span>Pares: <b id="pairs">0</b>/500</span>
+  <span>Tentativas: <b id="attempts">0</b></span>
+  <span>Tempo: <b id="time">0</b>s</span>
+  <button id="reset">Reiniciar</button>
+</header>
+
+<div id="board"></div>
+
+<div id="win">
+  <div>🎉 Você venceu!</div>
+  <div style="font-size:16px" id="winStats"></div>
+  <button id="playAgain">Jogar de novo</button>
+</div>
+
+<script>
+const TOTAL = 1000;
+const PAIRS = TOTAL / 2;
+
+// 500 cores distintas (HSL girando o matiz)
+const symbols = ['◆','●','■','▲','★','✦','⬢','✚','◉','❖'];
+const palette = [];
+for (let i = 0; i < PAIRS; i++) {
+  const hue = (i * 137.508) % 360; // golden angle → espalha bem
+  const light = 55 + (i % 3) * 8;
+  palette.push({
+    color: `hsl(${hue.toFixed(1)}, 70%, ${light}%)`,
+    symbol: symbols[i % symbols.length]
+  });
+}
+
+const board = document.getElementById('board');
+const pairsEl = document.getElementById('pairs');
+const attemptsEl = document.getElementById('attempts');
+const timeEl = document.getElementById('time');
+const winEl = document.getElementById('win');
+const winStats = document.getElementById('winStats');
+const resetBtn = document.getElementById('reset');
+const playAgainBtn = document.getElementById('playAgain');
+
+let firstCard = null;
+let lock = false;
+let matched = 0;
+let attempts = 0;
+let startTime = null;
+let timerId = null;
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function buildDeck() {
+  const deck = [];
+  for (let i = 0; i < PAIRS; i++) {
+    deck.push({ pairId: i, ...palette[i] });
+    deck.push({ pairId: i, ...palette[i] });
+  }
+  return shuffle(deck);
+}
+
+function startTimer() {
+  if (timerId) return;
+  startTime = Date.now();
+  timerId = setInterval(() => {
+    timeEl.textContent = Math.floor((Date.now() - startTime) / 1000);
+  }, 250);
+}
+
+function stopTimer() {
+  clearInterval(timerId);
+  timerId = null;
+}
+
+function init() {
+  board.innerHTML = '';
+  firstCard = null;
+  lock = false;
+  matched = 0;
+  attempts = 0;
+  pairsEl.textContent = '0';
+  attemptsEl.textContent = '0';
+  timeEl.textContent = '0';
+  winEl.classList.remove('show');
+  stopTimer();
+  startTime = null;
+
+  const deck = buildDeck();
+
+  // usa DocumentFragment pra não travar o DOM com 1000 appends
+  const frag = document.createDocumentFragment();
+  deck.forEach(card => {
+    const el = document.createElement('div');
+    el.className = 'cube';
+    el.dataset.pairId = card.pairId;
+    el.dataset.symbol = card.symbol;
+    el.style.setProperty('--c', card.color);
+    el.addEventListener('click', () => flip(el));
+    frag.appendChild(el);
+  });
+  board.appendChild(frag);
+}
+
+function flip(el) {
+  if (lock) return;
+  if (el.classList.contains('flipped') || el.classList.contains('matched')) return;
+
+  startTimer();
+  el.classList.add('flipped');
+
+  if (!firstCard) {
+    firstCard = el;
+    return;
+  }
+
+  attempts++;
+  attemptsEl.textContent = attempts;
+
+  const a = firstCard;
+  const b = el;
+  firstCard = null;
+
+  if (a.dataset.pairId === b.dataset.pairId) {
+    // par correto
+    a.classList.add('matched');
+    b.classList.add('matched');
+    a.classList.remove('flipped');
+    b.classList.remove('flipped');
+    matched++;
+    pairsEl.textContent = matched;
+    if (matched === PAIRS) {
+      stopTimer();
+      const totalTime = Math.floor((Date.now() - startTime) / 1000);
+      winStats.textContent = `${attempts} tentativas em ${totalTime}s`;
+      winEl.classList.add('show');
+    }
+  } else {
+    // errado: trava rápido
+    lock = true;
+    a.classList.add('wrong');
+    b.classList.add('wrong');
+    setTimeout(() => {
+      a.classList.remove('flipped', 'wrong');
+      b.classList.remove('flipped', 'wrong');
+      lock = false;
+    }, 400);
+  }
+}
+
+resetBtn.addEventListener('click', init);
+playAgainBtn.addEventListener('click', init);
+
+init();
+</script>
+</body>
+</html>
